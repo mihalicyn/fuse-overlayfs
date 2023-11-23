@@ -468,6 +468,11 @@ ovl_init (void *userdata, struct fuse_conn_info *conn)
   conn->want |= FUSE_CAP_DONT_MASK | FUSE_CAP_SPLICE_READ | FUSE_CAP_SPLICE_WRITE | FUSE_CAP_SPLICE_MOVE;
   if (lo->writeback)
     conn->want |= FUSE_CAP_WRITEBACK_CACHE;
+
+#if FUSE_VERSION >= FUSE_MAKE_VERSION(3, 18)
+  if (conn->capable & FUSE_CAP_ALLOW_IDMAP)
+    conn->want |= FUSE_CAP_OWNER_UID_GID_EXT | FUSE_CAP_ALLOW_IDMAP;
+#endif
 }
 
 static struct ovl_layer *
@@ -3775,8 +3780,13 @@ ovl_do_open (fuse_req_t req, fuse_ino_t parent, const char *name, int flags, mod
       if (ret < 0)
         return ret;
 
+#if FUSE_VERSION >= FUSE_MAKE_VERSION(3, 18)
+      uid = get_uid (lo, ctx->owner_uid);
+      gid = get_gid (lo, ctx->owner_gid);
+#else
       uid = get_uid (lo, ctx->uid);
       gid = get_gid (lo, ctx->gid);
+#endif
 
       fd = direct_create_file (get_upper_layer (lo), get_upper_layer (lo)->fd, path, uid, gid, flags, mode & ~ctx->umask);
       if (fd < 0)
@@ -4421,6 +4431,8 @@ ovl_symlink (fuse_req_t req, const char *link, fuse_ino_t parent, const char *na
   const struct fuse_ctx *ctx = fuse_req_ctx (req);
   char wd_tmp_file_name[32];
   bool need_delete_whiteout = true;
+  uid_t uid;
+  gid_t gid;
   cleanup_free char *path = NULL;
 
   if (UNLIKELY (ovl_debug (req)))
@@ -4463,7 +4475,15 @@ ovl_symlink (fuse_req_t req, const char *link, fuse_ino_t parent, const char *na
       return;
     }
 
-  ret = direct_symlinkat (get_upper_layer (lo), path, link, get_uid (lo, ctx->uid), get_gid (lo, ctx->gid));
+#if FUSE_VERSION >= FUSE_MAKE_VERSION(3, 18)
+  uid = get_uid (lo, ctx->owner_uid);
+  gid = get_gid (lo, ctx->owner_gid);
+#else
+  uid = get_uid (lo, ctx->uid);
+  gid = get_gid (lo, ctx->gid);
+#endif
+
+  ret = direct_symlinkat (get_upper_layer (lo), path, link, uid, gid);
   if (ret < 0)
     {
       fuse_reply_err (req, ENOMEM);
@@ -4997,6 +5017,8 @@ ovl_mknod (fuse_req_t req, fuse_ino_t parent, const char *name, mode_t mode, dev
   const struct fuse_ctx *ctx = fuse_req_ctx (req);
   char wd_tmp_file_name[32];
   mode_t backing_file_mode = mode | (lo->xattr_permissions ? 0755 : 0);
+  uid_t uid;
+  gid_t gid;
 
   if (UNLIKELY (ovl_debug (req)))
     fprintf (stderr, "ovl_mknod(ino=%" PRIu64 ", name=%s, mode=%d, rdev=%lu)\n",
@@ -5038,7 +5060,15 @@ ovl_mknod (fuse_req_t req, fuse_ino_t parent, const char *name, mode_t mode, dev
       return;
     }
 
-  if (do_fchownat (lo, lo->workdir_fd, wd_tmp_file_name, get_uid (lo, ctx->uid), get_gid (lo, ctx->gid), mode, 0) < 0)
+#if FUSE_VERSION >= FUSE_MAKE_VERSION(3, 18)
+  uid = get_uid (lo, ctx->owner_uid);
+  gid = get_gid (lo, ctx->owner_gid);
+#else
+  uid = get_uid (lo, ctx->uid);
+  gid = get_gid (lo, ctx->gid);
+#endif
+
+  if (do_fchownat (lo, lo->workdir_fd, wd_tmp_file_name, uid, gid, mode, 0) < 0)
     {
       fuse_reply_err (req, errno);
       unlinkat (lo->workdir_fd, wd_tmp_file_name, 0);
@@ -5124,6 +5154,8 @@ ovl_mkdir (fuse_req_t req, fuse_ino_t parent, const char *name, mode_t mode)
   int ret = 0;
   cleanup_free char *path = NULL;
   bool need_delete_whiteout = true;
+  uid_t uid;
+  gid_t gid;
   cleanup_lock int l = enter_big_lock ();
 
   if (UNLIKELY (ovl_debug (req)))
@@ -5169,8 +5201,16 @@ ovl_mkdir (fuse_req_t req, fuse_ino_t parent, const char *name, mode_t mode)
       return;
     }
 
+#if FUSE_VERSION >= FUSE_MAKE_VERSION(3, 18)
+  uid = get_uid (lo, ctx->owner_uid);
+  gid = get_gid (lo, ctx->owner_gid);
+#else
+  uid = get_uid (lo, ctx->uid);
+  gid = get_gid (lo, ctx->gid);
+#endif
+
   ret = create_directory (lo, get_upper_layer (lo)->fd, path, NULL, pnode, NULL, -1,
-                          get_uid (lo, ctx->uid), get_gid (lo, ctx->gid), mode & ~ctx->umask,
+                          uid, gid, mode & ~ctx->umask,
                           true, &st);
   if (ret < 0)
     {
